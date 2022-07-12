@@ -5,17 +5,15 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Snapshot.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract AMT is ERC20Snapshot, Ownable{
+contract LIQUIDITYAMT is ERC20Snapshot, Ownable{
 
-    string nameForDeploy = "testAMT";
-    string symbolForDeploy = "TAMT";
+    string nameForDeploy = "liqTestAMT";
+    string symbolForDeploy = "liqTAMT";
     constructor (string memory _name, string memory _symbol) ERC20(nameForDeploy,symbolForDeploy){}
     
     function mint(address account, uint256 amount) public onlyOwner(){
-        require(totalSupply()+amount<100000000*(10**18),"Total supply must not exceed 100.000.000 ATM");
-		_mint(account,amount);		
+        _mint(account,amount);
     }
-	
     function snapshot() public onlyOwner returns(uint256){
         return _snapshot();
     }

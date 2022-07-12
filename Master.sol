@@ -2,19 +2,19 @@
 pragma solidity ^0.8.0;
 
 //imports for liquitity interactions
-import "https://github.com/Uniswap/v2-periphery/blob/master/contracts/interfaces/IUniswapV2Router02.sol";
-import "https://github.com/Uniswap/v2-core/blob/master/contracts/interfaces/IUniswapV2Factory.sol";
+import "./IUniswapV2Router02.sol";
+import "./IUniswapV2Factory.sol";
 
 //local imports
-import "/contracts/AMT.sol";
-import "/contracts/liquidityAMT.sol";
+import "./AMT.sol";
+import "./LIQUIDITYAMT.sol";
 
 //Standar imports
-import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/IERC20.sol";
-import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/Ownable.sol";
-import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 //Timelock import
-import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/utils/TokenTimelock.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/TokenTimelock.sol";
 
 contract liqLocker is TokenTimelock{
     using SafeERC20 for IERC20;
@@ -63,6 +63,7 @@ contract Master is Ownable{
     //General variables
     AMT masterCoin;
     IERC20 payCoin;
+	IERC20 buyCoin;
     LIQUIDITYAMT liqToken;
     IERC20 externalLiqToken;
     address addrRouter = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
@@ -70,23 +71,38 @@ contract Master is Ownable{
     IUniswapV2Factory liqFactory;
     address vault;
     address liqPool;
+	address payerWallet;  // wallet which makes payments	
+	
 
     mapping(uint256 => uint256) public pays; // snapId -> corresponding amount payed on that snapshot, registry of the amount of payToken payed on specific snapshot
     mapping(uint256 => uint256) public liqPays; // snapId -> corresponding amount payd on that snapshot to liq providers
     mapping(address => mapping(uint256 => bool)) public alreadyCharged; // Registry of already charged by address for normal pays
     mapping (address => mapping(uint256 => bool)) public liqAlreadyCharged; //Registry of already charged by address for liquidity providers
 
-    constructor(address _masterCoin, address _payCoin, address _vault, address _liqToken){
+    constructor(address _masterCoin, address _payCoin, address _buyCoin, address _vault, address _liqToken, address _payerWallet){
         masterCoin = AMT(_masterCoin);
         payCoin = IERC20(_payCoin);
+		buyCoin = IERC20(_buyCoin);
         liqToken = LIQUIDITYAMT(_liqToken);
         liqFactory = IUniswapV2Factory(liqRouter.factory());
-        externalLiqToken = IERC20(liqFactory.createPair(_masterCoin, _payCoin));
+        externalLiqToken = IERC20(liqFactory.createPair(_masterCoin, _buyCoin));
         vault = _vault;
         liqPool = address(externalLiqToken);
-        payCoin.approve(addrRouter, 9999999999999999*(10**18));
-        masterCoin.approve(addrRouter, 9999999999999999*(10**18));
+        buyCoin.approve(addrRouter, 99999999999999999999*(10**18));
+        masterCoin.approve(addrRouter, 99999999999999999999*(10**18));
+		payerWallet = _payerWallet;
     }
+	
+	// Extended approve function	
+	function extendApprove(uint256 amount) public onlyOwner {
+		buyCoin.approve(addrRouter, amount);
+        masterCoin.approve(addrRouter, amount);		
+	}
+	
+	// Change payer wallet
+	function setPayerWallet(address newPayerWallet) public onlyOwner{
+		payerWallet = newPayerWallet;
+	}
 
     //View functions
     function addressLiquidityPool() public view returns(address){
@@ -98,13 +114,14 @@ contract Master is Ownable{
     }
 
     //Pays the rent and shares between the snapshot pay and the lucros vault at the rate determined by vaultParticipation
-    function payRent(uint256 amount, uint256 vaultParticipation) public onlyOwner{
+    function payRent(uint256 amount, uint256 vaultParticipation) public{
 
         // General checks
         require(payCoin.balanceOf(msg.sender) >= amount, "insuficient ammount");
         require (vaultParticipation > 0, "vaultParticipation cannot be zero");
         require(vaultParticipation <= 100, "vaultParticipation cannot be higher than 100");
         require(amount > 100, "amount to small");
+		require(msg.sender == payerWallet, "Only payer wallet can pay");
 
         //Pays definition to every part
 
@@ -145,7 +162,7 @@ contract Master is Ownable{
     }
 
     //Locking Liquidity - Master add liquidity provider function. Only executed once
-    function addLiquidityLocking(uint256 amountMasterCoin, uint256 amountPayCoin) public onlyOwner {
+    function addLiquidityLocking(uint256 amountMasterCoin, uint256 amountBuyCoin) public onlyOwner {
         //Transaction variables
         uint256 posibleVariation = 2; //Used to calculate minA and minB, its in %
         uint256 milisecsToValidate = 60000; // Used to pass deadline as current timestamp plus 1 minute
@@ -153,32 +170,32 @@ contract Master is Ownable{
         //Check requirements
         require(liqLocked == false, "already locked");
         require(masterCoin.balanceOf(msg.sender) > amountMasterCoin, "Not enougth AMT");
-        require(payCoin.balanceOf(msg.sender) > amountPayCoin, "Not enougth BBTC");
+        require(buyCoin.balanceOf(msg.sender) > amountBuyCoin, "Not enougth USDT");
         require(amountMasterCoin*(100-posibleVariation) > 100, "to small"); //Checks to avoid extremly small balances transactions resulting on 0 transfer
-        require(amountPayCoin*(100-posibleVariation) > 100, "to small"); ////Checks to avoid extremly small balances transactions resulting on 0 transfer
+        require(amountBuyCoin*(100-posibleVariation) > 100, "to small"); ////Checks to avoid extremly small balances transactions resulting on 0 transfer
 
         liqLocked = true;
         masterCoin.transferFrom(msg.sender,address(this),amountMasterCoin);
-        payCoin.transferFrom(msg.sender,address(this),amountPayCoin);
+        buyCoin.transferFrom(msg.sender,address(this),amountBuyCoin);
         uint256 amountLiquidityCreated;
         uint256 amountMasterToLiq;
-        uint256 amountPayToLiq;
-        (amountMasterToLiq,amountPayToLiq,amountLiquidityCreated) = liqRouter.addLiquidity(
+        uint256 amountBuyToLiq;
+        (amountMasterToLiq,amountBuyToLiq,amountLiquidityCreated) = liqRouter.addLiquidity(
             address(masterCoin),
-            address(payCoin),
+            address(buyCoin),
             amountMasterCoin,
-            amountPayCoin,
+            amountBuyCoin,
             (amountMasterCoin*(100-posibleVariation))/100,
-            (amountPayCoin*(100-posibleVariation))/100,
+            (amountBuyCoin*(100-posibleVariation))/100,
             address(this),
             block.timestamp + milisecsToValidate
         );
 
         //Deploy of timelock
-        uint256 lockingTime = 10*60*1000; // locking time in milisecs, actually 10 minutes
+        uint256 lockingTime = 60*1000*60*60*24*365*2; // locking time in milisecs, actually 2 years.
         liqLocker contractLiqLocker = new liqLocker(
             externalLiqToken,
-            payCoin,
+            buyCoin,
             liqToken,
             msg.sender,
             block.timestamp + lockingTime,
@@ -187,12 +204,12 @@ contract Master is Ownable{
         externalLiqToken.transfer(address(contractLiqLocker),amountLiquidityCreated);
         liqToken.mint(address(contractLiqLocker), amountLiquidityCreated);
         masterCoin.transfer(msg.sender,amountMasterCoin-amountMasterToLiq);
-        payCoin.transfer(msg.sender,amountPayCoin-amountPayToLiq);
+        buyCoin.transfer(msg.sender,amountBuyCoin-amountBuyToLiq);
         addrLiqLocker = address(contractLiqLocker);
     }
 
     //Master add liquidity provider function
-    function addLiquidity(uint256 amountMasterCoin, uint256 amountPayCoin) public {
+    function fiquidity(uint256 amountMasterCoin, uint256 amountBuyCoin) public {
 
         //Transaction variables
         uint256 posibleVariation = 2; //Used to calculate minA and minB, its in %
@@ -200,28 +217,28 @@ contract Master is Ownable{
 
         //Check requirements
         require(masterCoin.balanceOf(msg.sender) > amountMasterCoin, "Not enougth AMT");
-        require(payCoin.balanceOf(msg.sender) > amountPayCoin, "Not enougth BBTC");
+        require(buyCoin.balanceOf(msg.sender) > amountBuyCoin, "Not enougth USDT");
         require(amountMasterCoin*(100-posibleVariation) > 100, "to small"); //Checks to avoid extremly small balances transactions resulting on 0 transfer
-        require(amountPayCoin*(100-posibleVariation) > 100, "to small"); ////Checks to avoid extremly small balances transactions resulting on 0 transfer
+        require(amountBuyCoin*(100-posibleVariation) > 100, "to small"); ////Checks to avoid extremly small balances transactions resulting on 0 transfer
 
         masterCoin.transferFrom(msg.sender,address(this),amountMasterCoin);
-        payCoin.transferFrom(msg.sender,address(this),amountPayCoin);
+        buyCoin.transferFrom(msg.sender,address(this),amountBuyCoin);
         uint256 amountLiquidityCreated;
         uint256 amountMasterToLiq;
-        uint256 amountPayToLiq;
-        (amountMasterToLiq,amountPayToLiq,amountLiquidityCreated) = liqRouter.addLiquidity(
+        uint256 amountBuyToLiq;
+        (amountMasterToLiq,amountBuyToLiq,amountLiquidityCreated) = liqRouter.addLiquidity(
             address(masterCoin),
-            address(payCoin),
+            address(buyCoin),
             amountMasterCoin,
-            amountPayCoin,
+            amountBuyCoin,
             (amountMasterCoin*(100-posibleVariation))/100,
-            (amountPayCoin*(100-posibleVariation))/100,
+            (amountBuyCoin*(100-posibleVariation))/100,
             address(this),
             block.timestamp + milisecsToValidate
         );
         liqToken.mint(msg.sender, amountLiquidityCreated);
         masterCoin.transfer(msg.sender,amountMasterCoin-amountMasterToLiq);
-        payCoin.transfer(msg.sender,amountPayCoin-amountPayToLiq);
+        buyCoin.transfer(msg.sender,amountBuyCoin-amountBuyToLiq);
     }
 
     //Master remove liquidity provider function
@@ -234,11 +251,11 @@ contract Master is Ownable{
         uint256 milisecsToValidate = 60000; // Used to pass deadline as current timestamp plus 1 minute
         
         uint256 amountMasterFromLiq;
-        uint256 amountPayFromLiq;
+        uint256 amountBuyFromLiq;
         
-        (amountMasterFromLiq, amountPayFromLiq) = liqRouter.removeLiquidity(
+        (amountMasterFromLiq, amountBuyFromLiq) = liqRouter.removeLiquidity(
             address(masterCoin),
-            address(payCoin),
+            address(buyCoin),
             amount,
             0,
             0,
@@ -247,9 +264,9 @@ contract Master is Ownable{
         );
         liqToken.burnFrom(msg.sender,amount);
         masterCoin.transfer(msg.sender,amountMasterFromLiq);
-        payCoin.transfer(msg.sender,amountPayFromLiq);
+        buyCoin.transfer(msg.sender,amountBuyFromLiq);
     }
-
+	// Minting function for AMT
     function mintMaster(address account, uint256 amount) public onlyOwner(){
         masterCoin.mint(account, amount);      
     }
