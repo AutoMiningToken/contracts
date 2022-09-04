@@ -7,8 +7,8 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract AMT is ERC20Snapshot, Ownable{
 
-    string nameForDeploy = "testAMT";
-    string symbolForDeploy = "TAMT";
+    string nameForDeploy = "AutoMiningToken";
+    string symbolForDeploy = "AMT";
     constructor (string memory _name, string memory _symbol) ERC20(nameForDeploy,symbolForDeploy){}
     
     function mint(address account, uint256 amount) public onlyOwner(){
